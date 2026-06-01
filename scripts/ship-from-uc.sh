@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# Builds main.jsbundle + assets from UniversalClientMobile (source of truth) and
-# refreshes SeiChatSDK.swift for CocoaPods distribution.
+# Builds main.jsbundle + assets from UniversalClientMobile and syncs SeiChatSDK.swift.
+#
+# Dual-repo note: SeiChatSDK.swift source of truth is sei-et-seichat-mobile (UniversalClientMobile).
+# This repo receives a copy on each ship — re-run after any Swift change in the RN repo.
 set -euo pipefail
 
 SDK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UCM_ROOT="${SEI_UCM_ROOT:-${SDK_ROOT}/../sei_RN/sei-et-seichat-mobile/UniversalClientMobile}"
+UCM_ROOT="${SEI_UCM_ROOT:-${SDK_ROOT}/../../sei_RN/sei-et-seichat-mobile/UniversalClientMobile}"
 SHIP_DIR="${SDK_ROOT}/Shipped/ios"
 SWIFT_DEST="${SDK_ROOT}/Sources/SeiChatSDK/SeiChatSDK.swift"
+# Legacy bridge removed when embed API consolidated into SeiChatSDK.swift (pre-ME-672).
 BRIDGE_LEGACY="${SDK_ROOT}/Sources/SeiChatSDK/SeiChatReactNativeBridge.swift"
+
+# Keep in sync with SeiChatSDK.podspec s.resources (offline brand rasters only).
+# Paths are relative to SHIP_DIR. RN writes assets/assets/… because assets-dest is Shipped/ios
+# and Metro preserves the source path assets/images/… under an assets/ folder.
+REQUIRED_SHIP_ASSETS=(
+  assets/assets/images/strayer-logo.png
+  assets/assets/images/strayer-wordmark.png
+)
 
 if [[ ! -d "${UCM_ROOT}" ]]; then
   echo "UniversalClientMobile not found at: ${UCM_ROOT}"
@@ -34,17 +45,42 @@ mkdir -p "${SHIP_DIR}"
     --assets-dest "${SHIP_DIR}"
 )
 
+BUNDLE_PATH="${SHIP_DIR}/main.jsbundle"
+if [[ ! -s "${BUNDLE_PATH}" ]]; then
+  echo "ERROR: main.jsbundle is missing or empty — bundle step failed silently"
+  exit 1
+fi
+
+echo "==> Verify allowlisted ship assets"
+for rel in "${REQUIRED_SHIP_ASSETS[@]}"; do
+  path="${SHIP_DIR}/${rel}"
+  if [[ ! -f "${path}" ]]; then
+    echo "ERROR: missing required ship asset: ${path}"
+    echo "Update REQUIRED_SHIP_ASSETS in scripts/ship-from-uc.sh and SeiChatSDK.podspec when adding offline brand images."
+    exit 1
+  fi
+done
+
 echo "==> Sync SeiChatSDK.swift"
+SWIFT_SRC="${UCM_ROOT}/ios/UniversalClientMobile/SeiChatSDK.swift"
+if [[ ! -f "${SWIFT_SRC}" ]]; then
+  echo "ERROR: SeiChatSDK.swift not found at ${SWIFT_SRC}"
+  exit 1
+fi
+for api_marker in "public func initialize" "public func makeViewController" "public func invalidate"; do
+  if ! grep -q "${api_marker}" "${SWIFT_SRC}"; then
+    echo "ERROR: SeiChatSDK.swift missing expected public API (${api_marker}) — verify UniversalClientMobile source"
+    exit 1
+  fi
+done
 mkdir -p "$(dirname "${SWIFT_DEST}")"
-cp "${UCM_ROOT}/ios/UniversalClientMobile/SeiChatSDK.swift" "${SWIFT_DEST}"
+cp "${SWIFT_SRC}" "${SWIFT_DEST}"
 rm -f "${BRIDGE_LEGACY}"
 
-echo "==> Flatten raster assets for CocoaPods (basename next to jsbundle)"
-find "${SHIP_DIR}" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) \
-  -exec cp -f {} "${SHIP_DIR}/" \;
-
 echo "==> Done"
-echo "    Bundle: ${SHIP_DIR}/main.jsbundle"
+echo "    Bundle: ${BUNDLE_PATH}"
 echo "    Swift:  ${SWIFT_DEST}"
-ls -lh "${SHIP_DIR}/main.jsbundle"
-find "${SHIP_DIR}" -maxdepth 1 -type f \( -name '*.png' -o -name '*.jpg' \) -print
+ls -lh "${BUNDLE_PATH}"
+for rel in "${REQUIRED_SHIP_ASSETS[@]}"; do
+  ls -lh "${SHIP_DIR}/${rel}"
+done

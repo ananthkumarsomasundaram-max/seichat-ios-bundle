@@ -5,21 +5,54 @@ import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import UIKit
 
-@objcMembers
+/// Host apps must call public API on the main thread (`@MainActor`).
+@MainActor
 public final class SeiChatSDK: NSObject {
   public static let shared = SeiChatSDK()
 
   private static let log = Logger(subsystem: "SeiChatSDK", category: "embed")
 
-  private var launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+  /// Verified when shipping the binary repo; checked at runtime via React-Core bundle version.
+  private static let supportedReactNativeVersionPrefix = "0.84."
+
   private var customBundleURL: URL?
+  /// Must match AppRegistry.registerComponent('SeiChatEmbedded', …) in index.js.
   private let embeddedModuleName = "SeiChatEmbedded"
   private var delegate: SeiChatReactNativeDelegate?
   private var reactNativeFactory: RCTReactNativeFactory?
+  private var reactNativeVersionCompatible = true
 
-  private static func sdkLog(_ message: String) {
+  private static func fallbackViewController(reason: String) -> UIViewController {
+    sdkLog("makeViewController() fallback — \(reason)")
+    let fallback = UIViewController()
+    fallback.view.backgroundColor = .systemBackground
+
+    let label = UILabel()
+    label.text = "Sei Chat unavailable\n\(reason)"
+    label.numberOfLines = 0
+    label.textAlignment = .center
+    label.textColor = .secondaryLabel
+    label.font = .preferredFont(forTextStyle: .footnote)
+    label.translatesAutoresizingMaskIntoConstraints = false
+    fallback.view.addSubview(label)
+    NSLayoutConstraint.activate([
+      label.centerXAnchor.constraint(equalTo: fallback.view.centerXAnchor),
+      label.centerYAnchor.constraint(equalTo: fallback.view.centerYAnchor),
+      label.leadingAnchor.constraint(
+        greaterThanOrEqualTo: fallback.view.layoutMarginsGuide.leadingAnchor
+      ),
+      label.trailingAnchor.constraint(
+        lessThanOrEqualTo: fallback.view.layoutMarginsGuide.trailingAnchor
+      ),
+    ])
+    return fallback
+  }
+
+  fileprivate static func sdkLog(_ message: String) {
     log.info("\(message, privacy: .public)")
+#if DEBUG
     print("[SeiChatSDK] \(message)")
+#endif
   }
 
   fileprivate static func logBundleURL(_ url: URL?, source: String) {
@@ -32,14 +65,15 @@ public final class SeiChatSDK: NSObject {
   }
 
   /// Initializes RN factory once for host app embedding.
-  public func initialize(
-    launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil,
-    customBundleURL: URL? = nil
-  ) {
+  public func initialize(customBundleURL: URL? = nil) {
     Self.sdkLog("initialize() — customBundleURL: \(customBundleURL?.absoluteString ?? "nil")")
-    self.launchOptions = launchOptions
+
+    guard checkReactNativeVersionCompatible() else {
+      return
+    }
+
     let bundleURLChanged = self.customBundleURL != customBundleURL
-    self.customBundleURL = customBundleURL
+
     if reactNativeFactory != nil {
       if bundleURLChanged {
         invalidate()
@@ -48,6 +82,8 @@ public final class SeiChatSDK: NSObject {
       }
     }
 
+    self.customBundleURL = customBundleURL
+
     let sdkDelegate = SeiChatReactNativeDelegate(customBundleURL: customBundleURL)
     sdkDelegate.dependencyProvider = RCTAppDependencyProvider()
 
@@ -55,27 +91,36 @@ public final class SeiChatSDK: NSObject {
     reactNativeFactory = RCTReactNativeFactory(delegate: sdkDelegate)
   }
 
-  /// Creates a UIViewController that renders SeiChatEmbedded.
-  /// Designed to be invoked from UIKit/SwiftUI/Storyboard button actions.
+  /// Creates a UIViewController that renders SeiChatEmbedded. Requires `initialize()` first.
   public func makeViewController(initialProps: [String: Any] = [:]) -> UIViewController {
     Self.sdkLog("makeViewController() — props keys: \(initialProps.keys.sorted().joined(separator: ","))")
 
-    if reactNativeFactory == nil {
-      initialize(launchOptions: launchOptions, customBundleURL: customBundleURL)
+    if !reactNativeVersionCompatible {
+      let version = Self.reactNativeVersionString() ?? "unknown"
+      let reason =
+        "React Native \(version) is not supported. SeiChatSDK requires RN \(Self.supportedReactNativeVersionPrefix)x."
+      Self.sdkLog("ERROR: makeViewController() blocked — \(reason)")
+      return Self.fallbackViewController(reason: reason)
+    }
+
+    guard let reactNativeFactory else {
+      let reason =
+        "Call initialize() before makeViewController() (and again after invalidate())."
+      Self.sdkLog("ERROR: makeViewController() without initialize()")
+      return Self.fallbackViewController(reason: reason)
     }
 
     guard
-      let reactNativeFactory,
       let viewController = createViewControllerViaFactory(
         reactNativeFactory: reactNativeFactory,
         moduleName: embeddedModuleName,
         initialProps: initialProps
       )
     else {
-      Self.sdkLog("makeViewController() FAILED — no root view (check Metro in DEBUG, main.jsbundle in Release)")
-      let fallback = UIViewController()
-      fallback.view.backgroundColor = .white
-      return fallback
+      let reason =
+        "Could not create root view. In DEBUG, start Metro or use the pod shipped bundle; in Release, verify main.jsbundle is in the pod."
+      Self.sdkLog("ERROR: makeViewController() factory failed")
+      return Self.fallbackViewController(reason: reason)
     }
 
     Self.sdkLog("makeViewController() OK — factory-created module \(embeddedModuleName)")
@@ -87,6 +132,30 @@ public final class SeiChatSDK: NSObject {
     reactNativeFactory?.bridge?.invalidate()
     reactNativeFactory = nil
     delegate = nil
+    customBundleURL = nil
+  }
+
+  @discardableResult
+  private func checkReactNativeVersionCompatible() -> Bool {
+    let version = Self.reactNativeVersionString() ?? "unknown"
+    guard version.hasPrefix(Self.supportedReactNativeVersionPrefix) else {
+      reactNativeVersionCompatible = false
+      let message =
+        "SeiChatSDK is verified for React Native \(Self.supportedReactNativeVersionPrefix)x; " +
+        "host React-Core reports \(version). Align RN or ship a matching embed SDK build."
+      Self.sdkLog("ERROR: \(message)")
+#if DEBUG
+      assertionFailure(message)
+#endif
+      return false
+    }
+    reactNativeVersionCompatible = true
+    Self.sdkLog("React Native version OK: \(version)")
+    return true
+  }
+
+  private static func reactNativeVersionString() -> String? {
+    Bundle(for: RCTBridge.self).infoDictionary?["CFBundleShortVersionString"] as? String
   }
 
   private func createViewControllerViaFactory(
@@ -96,7 +165,7 @@ public final class SeiChatSDK: NSObject {
   ) -> UIViewController? {
     let factoryObject: AnyObject = reactNativeFactory.rootViewFactory
 
-    if let vc = invokeViewControllerSelector(
+    if let vc: UIViewController = invokeSelector(
       object: factoryObject,
       selectorName: "viewControllerWithModuleName:initialProperties:",
       moduleName: moduleName,
@@ -105,7 +174,7 @@ public final class SeiChatSDK: NSObject {
       return vc
     }
 
-    if let view = invokeViewSelector(
+    if let view: UIView = invokeSelector(
       object: factoryObject,
       selectorName: "viewWithModuleName:initialProperties:",
       moduleName: moduleName,
@@ -119,34 +188,36 @@ public final class SeiChatSDK: NSObject {
     return nil
   }
 
-  private func invokeViewControllerSelector(
+  private func invokeSelector<T: AnyObject>(
     object: AnyObject,
     selectorName: String,
     moduleName: String,
     initialProps: [String: Any]
-  ) -> UIViewController? {
+  ) -> T? {
     let selector = NSSelectorFromString(selectorName)
-    guard object.responds(to: selector), let raw = object.method(for: selector) else { return nil }
+    guard object.responds(to: selector) else { return nil }
 
-    typealias Function = @convention(c) (AnyObject, Selector, NSString, NSDictionary) -> AnyObject?
-    let function = unsafeBitCast(raw, to: Function.self)
-    let result = function(object, selector, moduleName as NSString, initialProps as NSDictionary)
-    return result as? UIViewController
-  }
+    guard let target = object as? NSObject else {
+      Self.sdkLog(
+        "ERROR: rootViewFactory is not NSObject — cannot call \(selectorName). " +
+          "Re-verify against React Native \(Self.supportedReactNativeVersionPrefix)x headers."
+      )
+      return nil
+    }
 
-  private func invokeViewSelector(
-    object: AnyObject,
-    selectorName: String,
-    moduleName: String,
-    initialProps: [String: Any]
-  ) -> UIView? {
-    let selector = NSSelectorFromString(selectorName)
-    guard object.responds(to: selector), let raw = object.method(for: selector) else { return nil }
+    guard
+      let unmanaged = target.perform(
+        selector,
+        with: moduleName as NSString,
+        with: initialProps as NSDictionary
+      )
+    else {
+      return nil
+    }
 
-    typealias Function = @convention(c) (AnyObject, Selector, NSString, NSDictionary) -> AnyObject?
-    let function = unsafeBitCast(raw, to: Function.self)
-    let result = function(object, selector, moduleName as NSString, initialProps as NSDictionary)
-    return result as? UIView
+    // RN 0.84 rootViewFactory factory selectors follow Cocoa naming (no copy/new/alloc) → autoreleased (+0).
+    // perform returns +0 for such methods; takeUnretainedValue is correct. Re-verify if RN changes ownership.
+    return unmanaged.takeUnretainedValue() as? T
   }
 }
 
@@ -156,10 +227,6 @@ final class SeiChatReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
   init(customBundleURL: URL?) {
     self.customBundleURL = customBundleURL
     super.init()
-  }
-
-  override func sourceURL(for bridge: RCTBridge) -> URL? {
-    bundleURL()
   }
 
   private func resolveShippedBundleURL() -> URL? {
@@ -174,16 +241,23 @@ final class SeiChatReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 #if DEBUG
     let provider = RCTBundleURLProvider.sharedSettings()
     let hostPort = provider.packagerServerHostPort()
+    SeiChatSDK.sdkLog("Metro packager host:port checked: \(hostPort.isEmpty ? "(empty)" : hostPort)")
     if !hostPort.isEmpty, RCTBundleURLProvider.isPackagerRunning(hostPort) {
       let metro = provider.jsBundleURL(forBundleRoot: "index")
-      SeiChatSDK.logBundleURL(metro, source: "Metro")
+      SeiChatSDK.logBundleURL(metro, source: "Metro @ \(hostPort)")
       return metro
     }
     if let shipped = resolveShippedBundleURL() {
-      SeiChatSDK.logBundleURL(shipped, source: "shipped main.jsbundle (Metro unavailable)")
+      let shippedSource = hostPort.isEmpty
+        ? "shipped main.jsbundle (Metro host not configured)"
+        : "shipped main.jsbundle (Metro not running @ \(hostPort))"
+      SeiChatSDK.logBundleURL(shipped, source: shippedSource)
       return shipped
     }
-    SeiChatSDK.logBundleURL(nil, source: "Metro not running and no shipped bundle in pod")
+    SeiChatSDK.logBundleURL(
+      nil,
+      source: "no bundle — start Metro or ship main.jsbundle into the pod"
+    )
     return nil
 #else
     let shipped = resolveShippedBundleURL()
