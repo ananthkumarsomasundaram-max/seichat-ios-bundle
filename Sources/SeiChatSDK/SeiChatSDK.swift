@@ -156,7 +156,7 @@ public final class SeiChatSDK: NSObject {
 
   private static func reactNativeVersionString() -> String? {
     // Do not use React-Core CFBundleShortVersionString (often "1.0"); use RN's version API.
-    let info = RCTGetReactNativeVersion()
+    guard let info = RCTGetReactNativeVersion() else { return nil }
     guard
       let major = info[RCTVersionMajor] as? NSNumber,
       let minor = info[RCTVersionMinor] as? NSNumber,
