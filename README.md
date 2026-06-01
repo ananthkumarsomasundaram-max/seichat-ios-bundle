@@ -28,7 +28,7 @@ Host `Podfile` must already integrate React Native **0.84** (`React-Core`, `Reac
 ```ruby
 pod 'SeiChatSDK',
   :git => 'https://gitlab.strategiced.com/teams/emerging-technologies/sei-chat/seichat-sdk-ios-binary.git',
-  :tag => 'v1.0.1'
+  :tag => 'v1.0.2'
 ```
 
 ## Ship a new bundle
