@@ -181,20 +181,7 @@ final class SeiChatReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
       SeiChatSDK.logBundleURL(shipped, source: "shipped main.jsbundle")
       return shipped
     }
-    // :path local pod has no shipped bundle; CocoaPods often builds the SDK pod as Release
-    // (so #if DEBUG here is unreliable). Fall back to Metro — run: cd UniversalClientMobile && npm start
-    let provider = RCTBundleURLProvider.sharedSettings()
-    if let metro = provider.jsBundleURL(forBundleRoot: "index") {
-      SeiChatSDK.logBundleURL(metro, source: "Metro (RCTBundleURLProvider)")
-      return metro
-    }
-    if let fallback = URL(
-      string: "http://127.0.0.1:8081/index.bundle?platform=ios&dev=true&minify=false"
-    ) {
-      SeiChatSDK.logBundleURL(fallback, source: "Metro (localhost fallback)")
-      return fallback
-    }
-    SeiChatSDK.logBundleURL(nil, source: "no bundle URL (ship main.jsbundle or start Metro)")
+    SeiChatSDK.logBundleURL(nil, source: "no bundle URL (ship main.jsbundle or pass customBundleURL)")
     return nil
   }
 }
