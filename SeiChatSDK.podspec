@@ -19,7 +19,7 @@ Pod::Spec.new do |s|
     :tag => "v#{version}",
   }
 
-  s.source_files = 'Sources/SeiChatSDK/**/*.swift'
+  s.source_files = 'Sources/SeiChatSDK/**/*.{swift,m}'
   # Keep in sync with scripts/ship-from-uc.sh REQUIRED_SHIP_ASSETS.
   s.resources = [
     'Shipped/ios/main.jsbundle',

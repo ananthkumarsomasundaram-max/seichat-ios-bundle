@@ -61,20 +61,29 @@ for rel in "${REQUIRED_SHIP_ASSETS[@]}"; do
   fi
 done
 
-echo "==> Sync SeiChatSDK.swift"
-SWIFT_SRC="${UCM_ROOT}/ios/UniversalClientMobile/SeiChatSDK.swift"
-if [[ ! -f "${SWIFT_SRC}" ]]; then
-  echo "ERROR: SeiChatSDK.swift not found at ${SWIFT_SRC}"
-  exit 1
-fi
-for api_marker in "public func initialize" "public func makeViewController" "public func invalidate"; do
+echo "==> Sync SeiChatSDK native sources"
+IOS_SRC_DIR="${UCM_ROOT}/ios/UniversalClientMobile"
+SDK_SOURCES=(
+  SeiChatSDK.swift
+  SeiChatHostBridge.swift
+  SeiChatHostBridge.m
+)
+mkdir -p "$(dirname "${SWIFT_DEST}")"
+for rel in "${SDK_SOURCES[@]}"; do
+  src="${IOS_SRC_DIR}/${rel}"
+  if [[ ! -f "${src}" ]]; then
+    echo "ERROR: missing ${src}"
+    exit 1
+  fi
+  cp "${src}" "${SDK_ROOT}/Sources/SeiChatSDK/"
+done
+SWIFT_SRC="${IOS_SRC_DIR}/SeiChatSDK.swift"
+for api_marker in "public func initialize" "public func makeViewController" "public func invalidate" "onCloseRequested"; do
   if ! grep -q "${api_marker}" "${SWIFT_SRC}"; then
-    echo "ERROR: SeiChatSDK.swift missing expected public API (${api_marker}) — verify UniversalClientMobile source"
+    echo "ERROR: SeiChatSDK.swift missing expected API (${api_marker}) — verify UniversalClientMobile source"
     exit 1
   fi
 done
-mkdir -p "$(dirname "${SWIFT_DEST}")"
-cp "${SWIFT_SRC}" "${SWIFT_DEST}"
 rm -f "${BRIDGE_LEGACY}"
 
 echo "==> Done"

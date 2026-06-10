@@ -8,6 +8,9 @@ import UIKit
 public final class SeiChatSDK: NSObject {
   public static let shared = SeiChatSDK()
 
+  /// Host sets this before presenting chat; invoked when the user taps Close in RN.
+  public var onCloseRequested: (() -> Void)?
+
   private static let log = Logger(subsystem: "SeiChatSDK", category: "embed")
 
   private var launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -100,6 +103,14 @@ public final class SeiChatSDK: NSObject {
     launchOptions = nil
     customBundleURL = nil
     isInitialized = false
+    onCloseRequested = nil
+  }
+
+  func notifyCloseRequested() {
+    Self.sdkLog("notifyCloseRequested()")
+    DispatchQueue.main.async { [weak self] in
+      self?.onCloseRequested?()
+    }
   }
 
   private func createViewControllerViaFactory(
@@ -166,21 +177,24 @@ final class SeiChatReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
       SeiChatSDK.logBundleURL(customBundleURL, source: "customBundleURL")
       return customBundleURL
     }
-#if DEBUG
-    // Require Metro in debug; do not fall back to Bundle.main/main.jsbundle (stale after pod tests).
+    if let shipped = resolveShippedBundleURL() {
+      SeiChatSDK.logBundleURL(shipped, source: "shipped main.jsbundle")
+      return shipped
+    }
+    // :path local pod has no shipped bundle; CocoaPods often builds the SDK pod as Release
+    // (so #if DEBUG here is unreliable). Fall back to Metro — run: cd UniversalClientMobile && npm start
     let provider = RCTBundleURLProvider.sharedSettings()
-    let hostPort = provider.packagerServerHostPort()
-    if !hostPort.isEmpty, RCTBundleURLProvider.isPackagerRunning(hostPort) {
-      let metro = provider.jsBundleURL(forBundleRoot: "index")
-      SeiChatSDK.logBundleURL(metro, source: "Metro")
+    if let metro = provider.jsBundleURL(forBundleRoot: "index") {
+      SeiChatSDK.logBundleURL(metro, source: "Metro (RCTBundleURLProvider)")
       return metro
     }
-    SeiChatSDK.logBundleURL(nil, source: "Metro (not running — cd UniversalClientMobile && npm start)")
+    if let fallback = URL(
+      string: "http://127.0.0.1:8081/index.bundle?platform=ios&dev=true&minify=false"
+    ) {
+      SeiChatSDK.logBundleURL(fallback, source: "Metro (localhost fallback)")
+      return fallback
+    }
+    SeiChatSDK.logBundleURL(nil, source: "no bundle URL (ship main.jsbundle or start Metro)")
     return nil
-#else
-    let shipped = resolveShippedBundleURL()
-    SeiChatSDK.logBundleURL(shipped, source: "shipped main.jsbundle")
-    return shipped
-#endif
   }
 }
